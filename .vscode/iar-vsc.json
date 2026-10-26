@@ -1,0 +1,15 @@
+{
+  "workspace": {
+    "path": "${workspaceFolder}\\STM32CubeF4-master\\Projects\\STM324x9I_EVAL\\Examples\\FLASH\\FLASH_DualBoot\\EWARM\\FLASH_DualBoot.eww"
+  },
+  "workspaces": {
+    "${workspaceFolder}\\STM32CubeF4-master\\Projects\\STM324x9I_EVAL\\Examples\\FLASH\\FLASH_DualBoot\\EWARM\\FLASH_DualBoot.eww": {
+      "configs": {
+        "${workspaceFolder}\\STM32CubeF4-master\\Projects\\STM324x9I_EVAL\\Examples\\FLASH\\FLASH_DualBoot\\EWARM\\FLASH_DualBoot.ewp": "FLASH_DualBoot_Bank1"
+      },
+      "selected": {
+        "path": "${workspaceFolder}\\STM32CubeF4-master\\Projects\\STM324x9I_EVAL\\Examples\\FLASH\\FLASH_DualBoot\\EWARM\\FLASH_DualBoot.ewp"
+      }
+    }
+  }
+}
