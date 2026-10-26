@@ -171,3 +171,140 @@
          2. 链接脚本 (.ld)：提供 STM32F405 的 Flash/RAM 空间尺寸与段排布规则。
          3. 链接器 (LD)：参考链接脚本的规则，把所有 .o 组装成一个完整的可执行文件（.elf），并把每个函数和变量分配到具体的绝对内存地址。
          4. 烧录工具 (OpenOCD)：抓取可执行文件，通过 SWD 接口直接把 Flash 镜像刷写入 STM32F405 的 0x08000000 地址空间中。
+   5. 编写 STM32 链接脚本（Linker Script，后缀通常为 .ld）
+      1. 链接脚本的核心框架
+      -  一份完整的 ARM Cortex-M 链接脚本由以下四个核心部分构成：
+         1. 入口声明 (ENTRY)：指明芯片复位后从哪里开始执行。
+         2. 符号定义 (Symbols)：计算栈顶指针、最小堆栈保留大小。
+         3. 内存区域宣告 (MEMORY)：定义芯片物理 Flash 与 RAM 的基地址与大小。
+         4. 段分配规则 (SECTIONS)：规划各个代码段、数据段分别放进哪块内存。
+      2. 声明程序入口与堆栈尺寸
+            ```
+            /* 1. 指定程序入口点，该符号定义在启动汇编 startup_stm32f405xx.s 中 */
+            ENTRY(Reset_Handler)
+
+            /* 2. 定义堆和栈的最小保留空间（单位：字节） */
+            _Min_Heap_Size  = 0x200;  /* 堆空间：512 字节（给 malloc 使用） */
+            _Min_Stack_Size = 0x400;  /* 栈空间：1024 字节（给局部变量与函数调用使用） */
+            ```
+      3. 宣告硬件物理内存 (MEMORY)
+         - 查阅 STM32F405VGT6 数据手册，其内部物理存储器参数如下：
+           - FLASH：容量 1024KB（1MB），物理起始地址为 0x08000000。
+           - SRAM：主 SRAM 容量 128KB，物理起始地址为 0x20000000。
+           - CCM RAM：核心专用高速 RAM 容量 64KB，物理起始地址为 0x10000000。
+         - 在脚本中用 MEMORY 块如实向链接器报备：
+            ```
+            MEMORY
+            {
+            /* 属性说明：
+                r: 可读 (Read)
+                w: 可写 (Write)
+                x: 可执行 (Execute)
+            */
+            FLASH  (rx)  : ORIGIN = 0x08000000, LENGTH = 1024K
+            RAM    (xrw) : ORIGIN = 0x20000000, LENGTH = 128K
+            CCMRAM (xrw) : ORIGIN = 0x10000000, LENGTH = 64K
+            }
+
+            /* 3. 计算栈顶指针地址：SRAM 的末尾（Cortex-M 的堆栈是满递减栈，从高地址往低地址增长） */
+            _estack = ORIGIN(RAM) + LENGTH(RAM);
+            ```
+      4. 规划段分布规则 (SECTIONS)
+      - 编译器会将 C 语言代码编译成不同的“段”，我们必须在这里指定它们的去处：
+          1. 中断向量表 (.isr_vector)
+            汇编启动文件 startup_stm32f405xx.s 中就用 .section .isr_vector 定义了这个表格。
+            Cortex-M 内核硬性规定：开机复位时，硬件必须首先读取 Flash 绝对首地址 0x08000000 的内容。因此中断向量表必须在 Flash 的最前方：
+                ```
+                SECTIONS
+                {
+                    .isr_vector :                 /* 段的名称 */
+                    {
+                        . = ALIGN(4);             /* 4 字节地址对齐 */
+                        KEEP(*(.isr_vector))      /* KEEP 关键字防止未引用的向量表被优化删除, * 是通配符，代表所有被编译出来的 .o 文件,即收集所有目标文件里面名字叫 .isr_vector 的内容，塞到当前位置 */
+                        . = ALIGN(4);
+                    } >FLASH
+                ```
+             > 通俗总结：请在 Flash 的最开头开辟一个叫 .isr_vector 的房间。先确认当前地址是 4 字节对齐的，然后把启动文件里的中断向量表完完整整塞进来。记住，开启代码优化时千万不能把它删掉，最后离开房间前再做一次 4 字节对齐。
+          2. 代码段 (.text) 与常量只读段 (.rodata)
+            所有由 C 语言编译出的机器指令以及只读常量（如 const 数组、字符串字面量）都要永久保存在 Flash 中：
+                ```
+                    /* 程序指令段 */
+                    .text :
+                    {
+                        . = ALIGN(4);
+                        *(.text)                  /* 收集所有目标文件的 .text 段 */
+                        *(.text*)                 /* 收集形如 .text.func 的子段，我们编译时通常会开启 -ffunction-sections 参数（给每个函数独立起一个名字，比如 main() 函数的代码段会被单独命名为 .text.main） */
+                        *(.glue_7)                /* 兼容 ARM/Thumb 切换胶水代码 */
+                        *(.glue_7t)
+                        *(.eh_frame)              /* 异常处理帧（Exception Handling Frame），主要用于 C++ 的异常捕获（try-catch）或者程序崩溃时打印函数调用栈（Stack Unwind） */
+
+                        KEEP (*(.init))           /* 全局构造函数调用入口 */
+                        KEEP (*(.fini))           /* 负责程序退出时调用析构函数 */
+
+                        . = ALIGN(4);
+                        _etext = .;               /* 记录代码段结束的地址，供后续逻辑参考 */
+                    } >FLASH
+
+                    /* 只读常量段 */
+                    .rodata :
+                    {
+                        . = ALIGN(4);
+                        *(.rodata)                /* 收集所有常量数据 */
+                        *(.rodata*)
+                        . = ALIGN(4);
+                    } >FLASH
+                ```
+             > 通俗总结：
+                .text：把你写的所有函数动作装进 Flash。
+                .rodata：把你写的所有死记硬背的只读常量装进 Flash。
+          3. 初始化数据段 (.data)
+             - 带有初始值的全局变量（例如 int a = 10;），其初始值“10”在断电时不能丢，必须刻录在 Flash 中。
+             - 程序运行时这个变量随时会被修改，所以它实际运行的地址必须位于 RAM。
+             > 语法 >RAM AT> FLASH ：告诉链接器运行地址在 RAM，但物理烧录存储在 FLASH 中。启动汇编代码 startup_stm32f405xx.s 在开机时，正是读取 _sidata、_sdata 与 _edata，执行循环将数据从 Flash 完整搬运至 RAM 中。
+                ```
+                    /* 记录数据段在 Flash 中的加载物理首地址（LMA） */
+                    /* _sidata：全称是 Start of Initialized Data（初始化数据起始地址）。 */
+                    _sidata = LOADADDR(.data);    /* 读取 .data 段在烧录时的物理加载地址（LMA）。此时它紧跟在代码段后面，位于 Flash 中。 */
+
+                    .data : 
+                    {
+                        . = ALIGN(4);
+                        _sdata = .;               /* 导出数据段在 RAM 中的起始运行地址（VMA）,此时它的值就是 RAM 的首地址 */
+                        *(.data)                  /* 通配符收集所有 .o 文件里的带初值全局变量，依次排队放好。 */
+                        *(.data*)
+                        . = ALIGN(4);
+                        _edata = .;               /* 导出数据段在 RAM 中的结束运行地址 */
+                    } >RAM AT> FLASH
+                ```
+          4. 未初始化数据段：.bss
+                ```
+                    .bss :
+                    {
+                        . = ALIGN(4);             /* 4 字节地址对齐 */
+                        _sbss = .;                /* 导出符号：bss 段在 RAM 中的起始地址 */
+                        __bss_start__ = _sbss;    /* 提供别名，兼容不同的底层库标准 */
+                        *(.bss)                   /* 收集所有源文件的 .bss 段 */
+                        *(.bss*)                  /* 收集形如 .bss.var 的子段 */
+                        *(COMMON)                 /* 收集弱符号或未决全局变量 */
+                        . = ALIGN(4);             /* 4 字节地址对齐 */
+                        _ebss = .;                /* 导出符号：bss 段在 RAM 中的结束地址 */
+                        __bss_end__ = _ebss;      /* 提供别名 */
+                    } >RAM
+                ```
+                > 启动汇编代码开机时会读取 _sbss 到 _ebss，将这段 RAM 内存统一逐字节清零。
+          5. 堆栈空间检查 (._user_heap_stack)
+             - 堆（Heap）：用户调用 malloc() 或 free() 时动态分配内存的地方。紧跟在 .bss 数据段后面，由低地址向高地址向上生长。每次调用 malloc()，堆顶指针就增加。
+             - 栈（Stack）：函数调用时保存局部变量、中断现场压栈保护的地方。从 RAM 最顶端（_estack = 0x2002 0000）开始，由高地址向低地址向下生长。每次调用函数、声明局部变量或产生中断，栈指针（SP）就减小。
+                ```
+                    ._user_heap_stack :
+                    {
+                        . = ALIGN(8);             /* 8 字节对齐（ARM AAPCS 标准规定栈顶必须 8 字节对齐） */
+                        PROVIDE ( end = . );      /* PROVIDE 的含义是“按需提供”。end/_end兼容不同版本的 C 标准运行库 */
+                        PROVIDE ( _end = . );     /* 当你在代码里第一次调用 malloc() 时，C 标准库会读取 _end，并把这个地址作为动态内存分配的起始底地址。 */
+                        . = . + _Min_Heap_Size;   /* 将内存游标强制向后推 512 字节，留给堆 */
+                        . = . + _Min_Stack_Size;  /* 将内存游标继续向后推 1024 字节，留给栈 */
+                        . = ALIGN(8);
+                    } >RAM
+                }   
+                ```                       
+             > 链接器，请帮我算一下：全局变量 + 堆底线 + 栈底线 的总尺寸，有没有把整个 RAM 撑爆
