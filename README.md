@@ -41,20 +41,20 @@ STM32开发环境
       - 这里面最重要的文件是 core_cm4.h。
       - STM32F405 是基于 ARM Cortex-M4 内核的芯片。内核级别的硬件控制（例如 NVIC 中断控制器的使能、SysTick 定时器寄存器操作、MPU 内存保护单元、FPU 单精度浮点指令集）是由 ARM 统一设计的，与 ST 公司无关。编译器必须依赖这些头文件，才能理解 __enable_irq()、NVIC_SetPriority() 等底层内嵌汇编指令。
     > 具体操作：
-        打开解压后的固件包路径：
-        STM32CubeF4/Drivers/CMSIS/Include/
-        将这个文件夹内的所有 .h 头文件，全部复制到工程的：
-        Drivers/CMSIS/Include/ 目录下。
+    > 1. 打开解压后的固件包路径：
+    >STM32CubeF4/Drivers/CMSIS/Include/
+    > 2. 将这个文件夹内的所有 .h 头文件，全部复制到工程的：
+    >Drivers/CMSIS/Include/ 目录下。
 2. 启动汇编（地基施工队）
    - GNU 启动汇编 (==startup_stm32f405xx.s==)：微控制器上电时不能直接从 main() 函数开始跑。它需要一段汇编代码完成硬件准备：
      1. 定义中断向量表（放在内存起始位置 0x08000000，首个字为堆栈指针顶端 _estack，第二个字为复位入口 Reset_Handler）。
      2. 初始化 C 运行环境：把 Flash 里的常量数据复制到 RAM（.data 段），并把 RAM 里未初始化的全局变量清零（.bss 段）。
      3. 调用 SystemInit()，最后跳转到 main()。
     > 具体操作：
-        因为选择的工具链是 ARM GNU Toolchain (GCC)，所以必须选择 gcc/ 目录下的 startup_stm32f405xx.s。
-        提取启动汇编文件：
-        打开固件包路径：STM32CubeF4/Drivers/CMSIS/Device/ST/STM32F4xx/Source/Templates/gcc/
-        复制 startup_stm32f405xx.s 到工程的 Core/Src/ 目录下。
+    > ###### 因为选择的工具链是 ARM GNU Toolchain (GCC)，所以必须选择 gcc/ 目录下的 startup_stm32f405xx.s。
+    > 1. 提取启动汇编文件：打开固件包路径：
+    >STM32CubeF4/Drivers/CMSIS/Device/ST/STM32F4xx/Source/Templates/gcc/
+    > 2. 复制 startup_stm32f405xx.s 到工程的 Core/Src/ 目录下。
 3. 外设寄存器定义（房间门牌号）
    - 外设寄存器映射 (==stm32f405xx.h==)：虽然内核是 ARM 设计的，但外设（GPIO、USART、TIM、SPI 等）是 ST 公司设计的。ST 为STM32F405 的每个寄存器分配了绝对物理地址（例如 GPIOA 的基地址是 0x40020000）。这个头文件通过结构体指针将内存地址映射为 C 语言对象，没有它，代码就无法识别诸如 GPIOA->MODER 这样的写法。
    - 时钟基础配置 (==system_stm32f4xx.c==)：芯片上电时默认运行在慢速的内部 RC 振荡器（HSI 16MHz）上。该文件定义了系统全局变量 SystemCoreClock，并提供了 SystemInit() 函数。该函数主要完成两项任务：
@@ -62,37 +62,37 @@ STM32开发环境
      2. 确保中断向量表基地址偏移（VTOR）指向正确的 Flash 起始位置。
 
     > 具体操作：
-        1. 提取芯片寄存器定义头文件：
-            打开固件包路径：STM32CubeF4/Drivers/CMSIS/Device/ST/STM32F4xx/Include/
-            复制以下 3 个文件到工程的 Drivers/CMSIS/Device/ST/STM32F4xx/Include/：
-            stm32f4xx.h
-            stm32f405xx.h
-            system_stm32f4xx.h
-        2. 提取时钟初始化源文件：
-            打开固件包路径：STM32CubeF4/Drivers/CMSIS/Device/ST/STM32F4xx/Source/Templates/
-            复制 system_stm32f4xx.c 到工程的 Core/Src/ 目录下。
+    > 1. 提取芯片寄存器定义头文件：
+    > 打开固件包路径：STM32CubeF4/Drivers/CMSIS/Device/ST/STM32F4xx/Include/
+    > 复制以下 3 个文件到工程的 Drivers/CMSIS/Device/ST/STM32F4xx/Include/：
+    >     - stm32f4xx.h
+    >     - stm32f405xx.h
+    >     - system_stm32f4xx.h
+    > 2. 提取时钟初始化源文件：
+    > 打开固件包路径：STM32CubeF4/Drivers/CMSIS/Device/ST/STM32F4xx/Source/Templates/
+    > 复制 system_stm32f4xx.c 到工程的 Core/Src/ 目录下。
 
 
 4. 硬件驱动库（现成的水暖电模块）
     - HAL 库之间存在较多依赖，但下述 6 个模块是 STM32 运行的“最小生命维持集”。先只保留这几个模块，能避免因为缺少其他外设宏而引发一连串难以排查的编译报错。后续需要串口或定时器时，再随时向里面追加 stm32f4xx_hal_uart.c 等文件即可。
     > 具体操作：
-        1. 复制头文件：
-            打开路径：STM32CubeF4/Drivers/STM32F4xx_HAL_Driver/Inc/
-            复制以下头文件到工程的 Drivers/STM32F4xx_HAL_Driver/Inc/：
-            stm32f4xx_hal.h（HAL 核心总头文件）
-            stm32f4xx_hal_def.h（HAL 状态码与结构体定义）
-            stm32f4xx_hal_cortex.h（SysTick 定时器与中断封装）
-            stm32f4xx_hal_rcc.h、stm32f4xx_hal_rcc_ex.h（时钟复位控制）
-            stm32f4xx_hal_gpio.h、stm32f4xx_hal_gpio_ex.h（通用输入输出口，用于点灯）
-            stm32f4xx_hal_pwr.h、stm32f4xx_hal_pwr_ex.h（电源管理与超频调压）
-        2. 复制对应的 C 源文件：
-            打开路径：STM32CubeF4/Drivers/STM32F4xx_HAL_Driver/Src/
-            复制以下 .c 文件到工程的 Drivers/STM32F4xx_HAL_Driver/Src/：
-            stm32f4xx_hal.c（初始化 HAL 计时滴答与内部机制）
-            stm32f4xx_hal_cortex.c
-            stm32f4xx_hal_rcc.c、stm32f4xx_hal_rcc_ex.c
-            stm32f4xx_hal_gpio.c
-            stm32f4xx_hal_pwr.c、stm32f4xx_hal_pwr_ex.c
+    > 1. 复制头文件：
+    > 打开路径：STM32CubeF4/Drivers/STM32F4xx_HAL_Driver/Inc/
+    > 复制以下头文件到工程的 Drivers/STM32F4xx_HAL_Driver/Inc/：
+    >    - stm32f4xx_hal.h（HAL 核心总头文件）
+    >    - stm32f4xx_hal_def.h（HAL 状态码与结构体定义）
+    >    - stm32f4xx_hal_cortex.h（SysTick 定时器与中断封装）
+    >    - stm32f4xx_hal_rcc.h、stm32f4xx_hal_rcc_ex.h（时钟复位控制）
+    >    - stm32f4xx_hal_gpio.h、stm32f4xx_hal_gpio_ex.h（通用输入输出口，用于点灯）
+    >    - stm32f4xx_hal_pwr.h、stm32f4xx_hal_pwr_ex.h（电源管理与超频调压）
+    > 2. 复制对应的 C 源文件：
+    > 打开路径：STM32CubeF4/Drivers/STM32F4xx_HAL_Driver/Src/
+    > 复制以下 .c 文件到工程的 Drivers/STM32F4xx_HAL_Driver/Src/：
+    >    - stm32f4xx_hal.c（初始化 HAL 计时滴答与内部机制）
+    >    - stm32f4xx_hal_cortex.c
+    >    - stm32f4xx_hal_rcc.c、stm32f4xx_hal_rcc_ex.c
+    >    - stm32f4xx_hal_gpio.c
+    >    - stm32f4xx_hal_pwr.c、stm32f4xx_hal_pwr_ex.c
 ### 四、编译器与链接脚本
    1. 编译器是什么？
       - 编译器（Compiler）是一个翻译工具。微控制器（MCU）只认二进制机器指令（即 0 和 1 组成的机器码），不懂人类写的 C/C++ 或汇编代码。在工具包中，arm-gnu-toolchain 就是这一套工具的集合：
