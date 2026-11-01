@@ -306,8 +306,117 @@ STM32开发环境
              ```                       
           > 链接器，请帮我算一下：全局变量 + 堆底线 + 栈底线 的总尺寸，有没有把整个 RAM 撑爆
 ## 五、启动文件
-##### 了解.section：
-可以把.section认为是一个箱子，.section后面跟着的就是这个箱子的名字，后面的东西都装进箱子里，那么可以看到启动文件有三个箱子；
+### 了解汇编指令
+```assembly
+  .syntax unified
+  .cpu cortex-m4
+  .fpu softvfp
+  .thumb
+```
+#### `.syntax unified`
+
+命令汇编器使用统一汇编语言（Unified Assembler Language，简称 UAL）语法来解析代码。
+在早期的 ARM 处理器上，代码存在两种完全分裂的汇编语法（称为 Divided 语法）：
+- ARM 状态语法：指令全部是 32 位的，语法要求非常严格。如果你希望指令更新标志位，你必须显式写出 S 后缀（例如 ADDS）。
+- 旧版 Thumb 状态语法：指令只有 16 位的，语法规则和 ARM 状态并不通用。很多基础算术指令会默认自动修改标志位，程序员不能随意省略操作数。
+- 后来 ARM 公司推出了 Thumb-2 技术（STM32 采用的 Cortex-M 架构正是基于 Thumb-2）。Thumb-2 混合了 16 位和 32 位指令。如果继续使用两套分裂的语法，程序员写汇编代码会极其混乱。
+- 为了解决这个问题，ARM 公司设计了 UAL（统一汇编语言）。它让 ARM 指令和 Thumb 指令共用同一套书写规则。.syntax unified 就是开启这套新规则的开关。
+
+---
+#### `.cpu cortex-m4 `
+- 圈定硬件指令集范围：不同 ARM 内核支持的指令集合不同。声明 cortex-m4 后，汇编器会开启该内核特有的指令支持（如硬件除法指令 UDIV/SDIV、单周期乘加指令以及饱和运算 DSP 指令）。
+- 拦截非法指令：如果在代码中写了 Cortex-M4 不支持的指令（例如属于 Cortex-A 架构的虚拟内存管理指令），汇编器在编译阶段就会直接报错，防止生成无法在硬件上执行的非法二进制码。
+- 协调管道优化：汇编器会根据 Cortex-M4 的 3 级流水线特性，对分支跳转和指令对齐进行合理的底层处理。
+
+---
+#### `.fpu softvfp`
+- 告诉汇编器：“当前代码不要生成硬件浮点指令，所有浮点运算都使用纯软件函数来模拟。”,`softvfp`就是 `Software Vector Floating Point（软件向量浮点模拟）`的缩写。
+当你在 C 语言里写小数加法时（例如 float c = a + b;），处理器有两种处理方式：
+  1. 硬件浮点（Hard-VFP）：
+    - 芯片内部有一块专门计算小数的硬件电路（FPU，浮点运算单元）。
+    - CPU 直接执行一条专门的硬件指令（如 VADD.F32），几个时钟周期就能算出结果。
+  2. 软件模拟浮点（Soft-VFP）：
+    - 处理器把小数当作普通的 32 位整型数字。
+    - CPU 无法直接执行浮点硬件指令，而是通过调用一段由几十条整数加减移位指令组成的软件函数（如 __aeabi_fadd）来强行模拟出浮点结果。
+    - 这种方式计算速度较慢，但它对硬件完全没有要求，任何基础 ARM 处理器都能运行。
+- STM32F405 明明自带硬件 FPU，为什么启动文件还要写 softvfp
+    1. 硬件 FPU 开机默认是关闭的：
+        - ARM 架构规定：芯片复位通电时，为了降低功耗和确保安全，硬件 FPU 默认处于关闭断电状态（Disabled）。
+        - 如果此时 CPU 贸然执行任何硬件浮点指令（比如以字母 V 开头的指令 VLDR、VADD），处理器会因为硬件未启用而立即触发 UsageFault（未定义指令异常），直接导致单片机开机死机。
+    2. FPU 的开启工作在后续代码中才完成：
+        - 开启 FPU 的寄存器配置代码写在 SystemInit() 函数中：
+        ```
+        /* 位于 system_stm32f4xx.c 中，向 CPACR 寄存器写入配置以启用 FPU */
+        SCB->CPACR |= ((3UL << 10*2) | (3UL << 11*2));
+        ```
+        - 启动汇编运行在 SystemInit() 之前。在启动文件运行的这段时间里，硬件 FPU 还没有通电。
+    3. 防止汇编器生成非法指令：
+        - 在启动文件开头加上 .fpu softvfp，等于向汇编器加上了一道安全锁：在启动阶段，严禁生成任何硬件浮点指令，从而确保代码在 FPU 开启之前绝对安全、稳定地运行。
+
+---
+#### `.thumb`
+- 这条指令命令汇编器生成 Thumb / Thumb-2 编码格式的机器指令，而不是传统的 32 位 ARM 编码指令。
+- 在老款 ARM 芯片（如 ARM7TDMI）时代：
+芯片只有两种状态：32 位的 ARM 状态 和 16 位的 Thumb 状态。
+当时的汇编器提供了两个切换指令：
+  - .arm：生成 32 位 ARM 代码。
+  - .thumb：生成 16 位 Thumb 代码。
+- 后来 ARM 推出了 Thumb-2 技术（混合 16 位和 32 位指令的技术）。Thumb-2 并不是一个独立的全新模式，而是对原有 Thumb 模式的向后兼容扩展。
+- 为了不破坏已有的编译器习惯和脚本工具链，GNU 汇编器（GAS）做了一个规则调整：
+- 只要你在前面指定了支持 Thumb-2 的现代内核（比如 .cpu cortex-m4）：
+此时汇编器只要看到 .thumb，就会自动开启 完整的 Thumb-2 指令集支持（既能编译 16 位指令，也能编译 32 位 Thumb-2 宽指令）。
+因此： .cpu cortex-m4 与 .thumb 配合在一起，让它具备了 Thumb-2 的能力。
+- Thumb-2 采用 16 位与 32 位混合编码。在保持高性能的同时，能够节省 30% 左右的 Flash 占用空间。
+
+---
+```
+.global  g_pfnVectors
+.global  Default_Handler
+```
+#### `.global`
+- 告诉汇编器把紧随其后的符号导出为全局符号，类比 C 语言里不加 static 的全局变量。
+- 汇编文件中定义的符号（标号）默认只有当前文件内部可见。
+    - g_pfnVectors 是中断向量表（那个装满函数地址的数组）的名字，必须被链接脚本和 C 语言代码访问。链接脚本通过符号名称把向量表精确放置在 Flash 起始位置；C 代码在重映射向量表时也需要通过 extern void *g_pfnVectors[]; 读取它。
+    - Default_Handler 需要被后续所有未定义中断弱符号绑定（.thumb_set），将其设为全局符号后，链接器在多目标文件合并时才能正确识别。Default_Handler 是一个“备用接线员”（里面是一个死循环 while(1)）。
+        ```
+        .thumb_set USART1_IRQHandler, Default_Handler
+        .thumb_set TIM2_IRQHandler,   Default_Handler
+        .thumb_set ADC_IRQHandler,    Default_Handler
+        ```
+        - 这段代码的意思是：“如果用户在 C 语言里没写 USART1_IRQHandler，那么发生串口中断时，全部统一转接到 Default_Handler 处理！”
+        - 在实际编译时，由于开启了函数分段编译优化，每个中断和函数都会被拆成独立的符号。如果 Default_Handler 不加 .global，链接器在把其他文件的引用转接到这里时，就会发现这个备用接线员是“非公开的隐藏人员”，从而导致符号解析失败。
+
+---
+```
+/* start address for the initialization values of the .data section. defined in linker script */
+.word  _sidata
+/* start address for the .data section. defined in linker script */  
+.word  _sdata
+/* end address for the .data section. defined in linker script */
+.word  _edata
+/* start address for the .bss section. defined in linker script */
+.word  _sbss
+/* end address for the .bss section. defined in linker script */
+.word  _ebss
+```
+#### `.word`
+- 意思是在当前内存位置塞入一个 32 位（4 字节）的数据，STM32（ARM Cortex-M）是 32 位单片机，它的一个标准“字”（Word）占用 4 个字节（32 位）。
+- 当你在汇编里写下：.word 0x12345678，汇编器就会在生成的二进制文件当前游标处，实实在在地塞进 4 个字节：78 56 34 12（ARM 默认小端模式存储）。
+- 这 5 行代码在只读内存中连续开辟了 5 个 32 位（4 字节）存储单元，保存了链接脚本计算出的 5 个关键边界地址。
+  - _sidata（Start of Initialized Data）：
+  存放在 Flash 中的全局变量初始值烧录基地址（LMA，加载存储地址）。
+  - _sdata（Start of Data）：
+  位于 RAM 中的全局变量运行时起始地址（VMA，虚拟内存地址）。
+  - _edata（End of Data）：
+  位于 RAM 中的全局变量运行时结束地址。
+  - _sbss（Start of BSS）：
+  位于 RAM 中的未初始化全局变量起始地址。
+  - _ebss（End of BSS）：
+  位于 RAM 中的未初始化全局变量结束地址。
+
+---
+#### `.section`
+- 可以把.section认为是一个箱子，.section后面跟着的就是这个箱子的名字，后面的东西都装进箱子里；
 在 GNU ARM 汇编（GAS 语法）中，.section 的标准语法格式如下：
 ```
 .section name [, "flags" [, %type [, entsize]]]
@@ -343,19 +452,13 @@ STM32开发环境
 > - 凡是以 .rodata 开头的段，默认补齐为 "a", %progbits。
 > - 自定义名称（如 .isr_vector）：汇编器无法推断意图，必须显式写出 "a", %progbits，否则工具链可能不会把它当作合法的只读数据段处理。
 
+---
 ##### 启动文件是芯片上电复位后执行的第一段程序。
 
 整个启动文件由四个部分组成:
 1. 建立中断向量表 (g_pfnVectors) , 填入栈顶指针和所有中断处理函数地址
     ```
     .section .isr_vector,"a",%progbits
-    ```
-    - .section：告诉汇编器，下面开始的内容属于一个特定的内存段,
-    - .isr_vector：这个段的自定义名称。我们在链接脚本 .ld 里写的 KEEP(*(.isr_vector))，就是通过这个名字找到这里的。
-    - "a"：段的属性标志，代表 allocatable（可分配的）。它通知链接器在程序运行时必须加载进物理内存（占用 Flash 或 RAM）。与此相对的，不写 a 代表Non-allocatable纯辅助信息段（如调试信息、编译器版本注释），仅留在电脑的 ELF 文件中，"x"	Executable	该段包含可执行的机器指令（CPU 可以跳转执行），"w"	Writable	该段在程序运行时允许被写入修改（数据变量）
-    - %progbits：段的数据类型说明，代表 Program Bits（程序数据）。它表明该段包含的是实际的程序代码或有效数据，而不是空无一物的占位符（与之相对的是用来占位的 %nobits）。
-    
-    ```
     .type g_pfnVectors, %object
     ```
     - .type：用来指定一个符号的类型。
@@ -371,16 +474,16 @@ STM32开发环境
     ```
     .word _estack
     ```
-    - .word：伪指令，意思是在当前内存位置塞入一个 32 位（4 字节）的数据。它背后的本质：这里的 Reset_Handler、NMI_Handler 都是函数名字。在汇编里，直接写函数名代表获取该函数的绝对内存地址。
+    - .word：伪指令，意思是在当前内存位置塞入一个 32 位（4 字节）的数据，STM32（ARM Cortex-M）是 32 位单片机，它的一个标准“字”（Word）占用 4 个字节（32 位）。当你在汇编里写下：.word 0x12345678，汇编器就会在生成的二进制文件当前游标处，实实在在地塞进 4 个字节：78 56 34 12（ARM 默认小端模式存储）。它背后的本质：这里的 Reset_Handler、NMI_Handler 都是函数名字。在汇编里，直接写函数名代表获取该函数的绝对内存地址。
     ```
     .section .isr_vector,"a",%progbits
     .type g_pfnVectors, %object
     .size g_pfnVectors, .-g_pfnVectors
 
     g_pfnVectors:            /* 冒号前面是标号（Label）。它相当于 C 语言里的数组名，代表向量表的起始地址 */
-    .word _estack            /* 0号表项：初始主堆栈指针 (MSP) */
-    .word Reset_Handler      /* 1号表项：复位中断服务函数入口 */
-    .word NMI_Handler        /* 2号表项：不可屏蔽中断 */
+    .word _estack            /* 0号表项：栈顶地址 */
+    .word Reset_Handler      /* 1号表项：复位函数地址 */
+    .word NMI_Handler        /* 2号表项：不可屏蔽中断函数地址 */
     .word HardFault_Handler  /* 3号表项：硬件错误异常 */
     ...
     .word SysTick_Handler    /* 系统滴答定时器中断 */
