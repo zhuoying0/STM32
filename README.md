@@ -21,6 +21,8 @@ STM32开发环境
 1. 内核标准（图纸规范）
     ```
     stm32f405_minimal/
+    ├── .txt
+    ├── .ld
     ├── Core/
     │   ├── Inc/
     │   └── Src/
@@ -169,7 +171,9 @@ STM32开发环境
       3. 链接器 (LD)：参考链接脚本的规则，把所有 .o 组装成一个完整的可执行文件（.elf），并把每个函数和变量分配到具体的绝对内存地址。
       4. 烧录工具 (OpenOCD)：抓取可执行文件，通过 SWD 接口直接把 Flash 镜像刷写入 STM32F405 的 0x08000000 地址空间中。
 5. 编写 STM32 链接脚本（Linker Script，后缀通常为 .ld）
-   1. 链接脚本的核心框架
+   1. 在官方`STM32CubeF4\Projects\STM32F4-Discovery\Templates_LL\STM32CubeIDE`里面的 STM32F407VGTx_FLASH.ld 可以直接拿来给 STM32F405 使用。因为（F407 比 F405 增加了硬件 Ethernet MAC 控制器与 DCMI 接口）。链接脚本不负责配置外设功能，只负责分配内存。
+        - 也可以在`STM32CubeF4\Projects\STM32F4-Discovery\Examples\GPIO\GPIO_EXTI\STM32CubeIDE`里找,都是例程。
+   2. 链接脚本的核心框架
    -  一份完整的 ARM Cortex-M 链接脚本由以下四个核心部分构成：
       1. 入口声明 (ENTRY)：指明芯片复位后从哪里开始执行。
       2. 符号定义 (Symbols)：计算栈顶指针、最小堆栈保留大小。
