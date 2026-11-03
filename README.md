@@ -675,78 +675,138 @@ ARM 架构支持 ARM 状态（32位指令）与 Thumb 状态（16/32位指令）
     bx lr             ──────────────────────────┘ (2. 读取 LR 地址写入 PC，返回)
     ```
 
-##### 启动文件是芯片上电复位后执行的第一段程序。
+### 启动文件六大核心部分
+#### 第一部分：汇编环境与架构配置（文件头部）
 
-整个启动文件由四个部分组成:
-1. 建立中断向量表 (g_pfnVectors) , 填入栈顶指针和所有中断处理函数地址
-    ```
-    .section .isr_vector,"a",%progbits
-    .type g_pfnVectors, %object
-    ```
-    - .type：用来指定一个符号的类型。
-    - g_pfnVectors：符号的名字（g_ 表示全局，pfn 表示函数指针，Vectors 表示向量）。
-    - %object：告诉编译器与调试器，g_pfnVectors 是一个数据对象（变量/数组），而不是一段可以直接跳转执行的代码函数（如果是函数，这里会写 %function）。
-    ```
-    .size g_pfnVectors, .-g_pfnVectors
-    ```
-    - .size：用来计算并声明该符号在内存中占用的总字节大小
-    - .（当前地址）：表示当前这一行的内存地址游标。
-    - g_pfnVectors：表示整个数组起始位置的内存地址。
-    - .-g_pfnVectors：这是汇编里的指针差值计算。用当前游标地址减去起始地址，算出的结果正好就是整张向量表占用的字节总数。调试器可以通过这个属性准确知道这个数组有多大。
-    ```
-    .word _estack
-    ```
-    - .word：伪指令，意思是在当前内存位置塞入一个 32 位（4 字节）的数据，STM32（ARM Cortex-M）是 32 位单片机，它的一个标准“字”（Word）占用 4 个字节（32 位）。当你在汇编里写下：.word 0x12345678，汇编器就会在生成的二进制文件当前游标处，实实在在地塞进 4 个字节：78 56 34 12（ARM 默认小端模式存储）。它背后的本质：这里的 Reset_Handler、NMI_Handler 都是函数名字。在汇编里，直接写函数名代表获取该函数的绝对内存地址。
-    ```
-    .section .isr_vector,"a",%progbits
-    .type g_pfnVectors, %object
-    .size g_pfnVectors, .-g_pfnVectors
-
-    g_pfnVectors:            /* 冒号前面是标号（Label）。它相当于 C 语言里的数组名，代表向量表的起始地址 */
-    .word _estack            /* 0号表项：栈顶地址 */
-    .word Reset_Handler      /* 1号表项：复位函数地址 */
-    .word NMI_Handler        /* 2号表项：不可屏蔽中断函数地址 */
-    .word HardFault_Handler  /* 3号表项：硬件错误异常 */
-    ...
-    .word SysTick_Handler    /* 系统滴答定时器中断 */
-    .word USART1_IRQHandler  /* 串口1中断 */
-    ```
-2. 复位处理函数 (Reset_Handler)
+```assembly
+  .syntax unified
+  .cpu cortex-m4
+  .fpu softvfp
+  .thumb
 ```
-/* 1. 加载内存边界地址到通用寄存器 */
-  ldr   r0, =_sdata         /* 将 .data 段在 RAM 中的起始目标地址（VMA）装载到寄存器 r0 */
-  ldr   r1, =_edata         /* 将 .data 段在 RAM 中的结束地址装载到寄存器 r1，用作循环退出的边界守卫。 */
-  ldr   r2, =_sidata        /* 将 .data 段初值在 Flash 中的原始存放地址（LMA）装载到寄存器 r2 */
-  movs  r3, #0              /* 将寄存器 r3 清零。r3 在整个搬运过程中充当字节偏移量计数器（Offset） */
-  b     LoopCopyDataInit    /* 无条件直接跳转到末尾的 LoopCopyDataInit 进行边界检查 */
 
-/* 2. 循环搬运主体 */
-CopyDataInit:
-  ldr   r4, [r2, r3]       /* 从 Flash (r2 + r3) 读取 4 字节数据到 r4 */
-  str   r4, [r0, r3]       /* 将 r4 的数据写入 RAM (r0 + r3) */
-  adds  r3, r3, #4         /* 偏移量增加 4 字节 */
+- **做了什么**：给汇编器下达代码编译规则。
+- **核心动作**：
+- 开启 ARM 统一汇编语法（UAL）。
+- 声明硬件为 Cortex-M4 内核，输出 Thumb/Thumb-2 指令。
+- 暂时关闭硬件浮点指令（`softvfp`），防止在 FPU 寄存器尚未通电时误触发非法指令异常。
 
-/* 3. 循环边界判断 */
-LoopCopyDataInit:
-  adds  r4, r0, r3         /* 计算当前 RAM 写入位置：r4 = _sdata + 偏移量 */
-  cmp   r4, r1             /* 比较当前位置与 RAM 结束地址 (_edata) ,本质上是执行 r4 - r1（当前 RAM 写入游标减去 RAM 终止地址 _edata），不保留差值结果，只根据相减结果刷新 CPU 条件标志位*/
-  bcc   CopyDataInit       /* 若 r4 < r1 (无借位/进位标志未置位)，继续拷贝,bcc 等价于若小于则跳转 */
+---
+
+### 第二部分：堆栈空间预留与全局导出
+
+```assembly
+.global g_pfnVectors
+.global Default_Handler
+
+/* 以及关于 _sidata, _sdata, _edata, _sbss, _ebss 的 .word 声明 */
 ```
-这段汇编代码完全等价于以下 C 语言指针遍历循环：
-```
-extern uint32_t _sidata; /* Flash 中初值存放的起始物理地址 */
-extern uint32_t _sdata;  /* RAM 中目标起始地址 */
-extern uint32_t _edata;  /* RAM 中目标结束地址 */
 
-void Copy_Data_Section(void) {
-    uint32_t *flash_src = &_sidata;
-    uint32_t *ram_dst   = &_sdata;
+- **做了什么**：打通启动文件与外部环境（链接脚本和其他 C 文件）的连接桥梁。
+- **核心动作**：
+- 通过 `.global` 导出中断向量表（`g_pfnVectors`）和默认异常捕获函数（`Default_Handler`），让链接器可以识别并定位。
+- 集中声明由链接脚本（`.ld`）生成的 5 个关键内存边界符号（`.data` 段与 `.bss` 段在 Flash 和 RAM 中的首尾地址）。
 
-    while (ram_dst < &_edata) {
-        *ram_dst++ = *flash_src++;
-    }
-}
+---
+
+### 第三部分：中断向量表（Vector Table）
+
+```assembly
+  .section .isr_vector,"a",%progbits
+  .type g_pfnVectors, %object
+  .size g_pfnVectors, .-g_pfnVectors
+
+g_pfnVectors:
+  .word _estack
+  .word Reset_Handler
+  .word NMI_Handler
+  .word HardFault_Handler
+  ...
+  .word USART1_IRQHandler
+  ...
+
 ```
+
+- **做了什么**：构建 ARM 硬件异常与外设中断的入口地址总表。
+- **核心动作**：
+- 必须放在 Flash 的物理起始位置（`0x08000000`）。
+- 第 0 项为**初始栈顶地址（`_estack`）**，通电瞬间由硬件直接读入主堆栈指针寄存器（MSP）。
+- 第 1 项为**复位异常入口（`Reset_Handler`）**，硬件读入该地址直接赋给 PC 寄存器，启动代码执行。
+- 后续严格按照硬件手册排列各个系统异常与外设（USART、TIM、DMA）的中断服务函数地址。
+
+
+
+---
+
+### 第四部分：复位处理函数（Reset_Handler，执行主体）
+
+这是整个文件唯一一段连续执行的逻辑代码：
+
+```assembly
+  .section .text.Reset_Handler
+  .weak Reset_Handler
+  .type Reset_Handler, %function
+Reset_Handler:
+  ldr   sp, =_estack
+  bl    SystemInit
+  ... (搬运 .data) ...
+  ... (清零 .bss) ...
+  bl    __libc_init_array
+  bl    main
+  bx    lr
+
+```
+
+- **做了什么**：搭建 C 语言正常运行所必需的底层内存环境（C Runtime）。
+- **核心动作按顺序执行**：
+1. **初始化 SP**：强制将栈指针指向 SRAM 顶端（`_estack`）。
+2. **硬件底层准备**：跳转执行 `SystemInit()`，上电开启硬件 FPU，重置系统时钟。
+3. **拷贝 `.data` 段**：用汇编循环把带初值的全局变量从 Flash 复制到 SRAM。
+4. **清零 `.bss` 段**：用汇编循环把未初始化的全局变量所在的 SRAM 区域全刷成 0。
+5. **调用全局构造**：调用 `__libc_init_array`（用于 C++ 全局对象构造）。
+6. **跳入用户入口**：执行 `bl main`，正式切入 C 语言开发的世界。
+
+
+
+---
+
+### 第五部分：默认异常死循环（Default_Handler）
+
+```assembly
+  .section .text.Default_Handler,"ax",%progbits
+Default_Handler:
+Infinite_Loop:
+  b Infinite_Loop
+  .size Default_Handler, .-Default_Handler
+
+```
+
+- **做了什么**：实现一个兜底接线员。
+- **核心动作**：
+- 内部只有一句死循环跳转（`b Infinite_Loop`）。
+- 如果外部开启了某个外设中断（比如打开了串口接收中断），但在 C 语言代码里完全忘记编写对应的 `USART1_IRQHandler()` 函数，CPU 就会跳进这个死循环挂起，防止代码跑飞。
+
+
+
+---
+
+### 第六部分：中断弱符号绑定（Weak Aliases）
+
+```assembly
+  .weak USART1_IRQHandler
+  .thumb_set USART1_IRQHandler,Default_Handler
+
+  .weak TIM2_IRQHandler
+  .thumb_set TIM2_IRQHandler,Default_Handler
+  ...
+```
+
+- **做了什么**：建立“用户编写了函数就用用户的，没写就用兜底的”无缝覆盖机制。
+- **核心动作**：
+- 使用 `.weak` 把所有外设中断函数声明为弱符号。
+- 使用 `.thumb_set` 将这些弱符号的地址默认指向 `Default_Handler`。
+- 当你在 C 语言中定义了强符号（如 `void USART1_IRQHandler(void)`）时，链接器会自动解除绑定，指向你编写的代码。
+
 
 ## 六、核心应用代码与系统配置
 #### 硬件总配置文件：stm32f4xx_hal_conf.h
