@@ -15,6 +15,8 @@ set(CMAKE_SIZE_UTIL arm-none-eabi-size)
 # 2. 定义工程名称与支持语言
 project(stm32f405_minimal C ASM)
 
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 

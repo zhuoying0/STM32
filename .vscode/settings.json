@@ -1,3 +1,17 @@
 {
-    "cmake.sourceDirectory": "D:/code/STM32/stm32f405_minimal"
+    "cmake.sourceDirectory": "D:/code/STM32/stm32f405_minimal",
+
+    "clangd.arguments": [
+        "--compile-commands-dir=${workspaceFolder}/stm32f405_minimal/build",
+        // "--header-insertion=never"
+    ],
+    "clangd.fallbackFlags": [
+        "-DSTM32F405xx",
+        "-DUSE_HAL_DRIVER",
+        "-I${workspaceFolder}/stm32f405_minimal/Core/Inc",
+        "-I${workspaceFolder}/stm32f405_minimal/Drivers/CMSIS/Include",
+        "-I${workspaceFolder}/stm32f405_minimal/Drivers/CMSIS/Device/ST/STM32F4xx/Include",
+        "-I${workspaceFolder}/stm32f405_minimal/Drivers/STM32F4xx_HAL_Driver/Inc",
+        "-I${workspaceFolder}/stm32f405_minimal/Drivers/STM32F4xx_HAL_Driver/Inc/Legacy"
+    ]
 }

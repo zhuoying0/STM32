@@ -1,0 +1,2 @@
+Diagnostics:
+  UnusedIncludes: None //全局禁用未使用头文件提示
